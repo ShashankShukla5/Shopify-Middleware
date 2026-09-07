@@ -1,0 +1,25 @@
+{
+  "name": "shopify-payment-collection-poc",
+  "version": "1.0.0",
+  "description": "Shopify Admin GraphQL backend for Kefi practitioner draft orders and order webhooks",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "shopify",
+    "webhook",
+    "graphql",
+    "payment-collection",
+    "poc"
+  ],
+  "license": "UNLICENSED",
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2"
+  }
+}
