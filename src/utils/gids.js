@@ -19,8 +19,13 @@ function toOrderGid(orderId) {
   return toGid('Order', orderId);
 }
 
+function toCustomerGid(customerId) {
+  return toGid('Customer', customerId);
+}
+
 module.exports = {
   toGid,
   toVariantGid,
   toOrderGid,
+  toCustomerGid,
 };

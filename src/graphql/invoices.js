@@ -13,6 +13,23 @@ const ORDER_INVOICE_SEND = `
   }
 `;
 
+const DRAFT_ORDER_INVOICE_SEND = `
+  mutation DraftOrderInvoiceSend($id: ID!, $email: EmailInput) {
+    draftOrderInvoiceSend(id: $id, email: $email) {
+      draftOrder {
+        id
+        name
+        invoiceUrl
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
 module.exports = {
   ORDER_INVOICE_SEND,
+  DRAFT_ORDER_INVOICE_SEND,
 };

@@ -4,24 +4,13 @@ const { AppError } = require('../errors/AppError');
 const { shopifyGraphQLData } = require('../clients/shopifyGraphQL');
 const { CREATE_DRAFT_ORDER } = require('../graphql/draftOrders');
 const { getVariantByGid } = require('./variant.service');
+const { getCustomerById } = require('./customer.service');
 const { validateCreateDraftOrderBody } = require('../validators/draftOrder.validator');
 const { resolveLineUnitPrice } = require('./cartPricing.service');
+const { buildReadableLineAttributes } = require('../utils/kefiAttributes');
 
-function buildLineCustomAttributes(cartItem, parsedMarkup, pricing) {
-  const customAttributes = [];
-
-  if (cartItem.properties) {
-    for (const [key, value] of Object.entries(cartItem.properties)) {
-      if (value === null || value === undefined || value === '') {
-        continue;
-      }
-
-      customAttributes.push({
-        key: String(key),
-        value: String(value),
-      });
-    }
-  }
+function buildLineCustomAttributes(cartItem, parsedMarkup, pricing, finalUnitPrice) {
+  const customAttributes = buildReadableLineAttributes(cartItem);
 
   customAttributes.push({
     key: 'Practitioner Markup',
@@ -34,8 +23,8 @@ function buildLineCustomAttributes(cartItem, parsedMarkup, pricing) {
   });
 
   customAttributes.push({
-    key: 'Shopify Catalog Unit Price',
-    value: Number(pricing.catalogUnitPrice).toFixed(2),
+    key: 'Final Customer Price',
+    value: finalUnitPrice.toFixed(2),
   });
 
   customAttributes.push({
@@ -56,6 +45,7 @@ function buildDraftOrderInput({
   parsedMarkup,
   finalTotal,
   customerEmail,
+  practitionerCustomer,
 }) {
   const draftOrderInput = {
     lineItems: [
@@ -80,20 +70,28 @@ function buildDraftOrderInput({
       { key: 'Base Cart Total', value: baseTotal.toFixed(2) },
       { key: 'Practitioner Markup', value: parsedMarkup.toFixed(2) },
       { key: 'Final Customer Total', value: finalTotal.toFixed(2) },
+      { key: 'Practitioner Customer ID', value: practitionerCustomer.id },
     ],
+    purchasingEntity: {
+      customerId: practitionerCustomer.id,
+    },
   };
 
-  if (customerEmail) {
-    draftOrderInput.email = customerEmail;
+  if (customerEmail && customerEmail !== practitionerCustomer.email) {
+    draftOrderInput.customAttributes.push({
+      key: 'Client Email',
+      value: customerEmail,
+    });
   }
 
   return draftOrderInput;
 }
 
 async function createDraftOrderFromCart(body) {
-  const { cart, cartItem, quantity, parsedMarkup, customerEmail } =
+  const { cart, cartItem, quantity, parsedMarkup, customerEmail, practitioner } =
     validateCreateDraftOrderBody(body);
 
+  const practitionerCustomer = await getCustomerById(practitioner.id);
   const variantGid = toVariantGid(cartItem.variant_id);
   const { unitPrice: catalogUnitPrice } = await getVariantByGid(variantGid);
   const pricing = resolveLineUnitPrice({ cartItem, catalogUnitPrice });
@@ -117,7 +115,8 @@ async function createDraftOrderFromCart(body) {
   const customAttributes = buildLineCustomAttributes(
     cartItem,
     parsedMarkup,
-    pricing
+    pricing,
+    finalUnitPrice
   );
 
   const input = buildDraftOrderInput({
@@ -130,6 +129,7 @@ async function createDraftOrderFromCart(body) {
     parsedMarkup,
     finalTotal,
     customerEmail,
+    practitionerCustomer,
   });
 
   const data = await shopifyGraphQLData(CREATE_DRAFT_ORDER, { input });
@@ -156,11 +156,14 @@ async function createDraftOrderFromCart(body) {
 
   return {
     checkoutUrl: result.draftOrder.invoiceUrl,
+    invoiceUrl: result.draftOrder.invoiceUrl,
+    practitionerEmail: practitionerCustomer.email,
     draftOrder: {
       id: result.draftOrder.id,
       name: result.draftOrder.name,
       status: result.draftOrder.status,
       email: result.draftOrder.email,
+      customer: result.draftOrder.customer,
       baseTotal: Number(baseTotal.toFixed(2)),
       markup: Number(parsedMarkup.toFixed(2)),
       finalTotal: Number(finalTotal.toFixed(2)),

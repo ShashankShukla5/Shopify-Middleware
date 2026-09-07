@@ -8,6 +8,13 @@ const CREATE_DRAFT_ORDER = `
         invoiceUrl
         email
         currencyCode
+        customer {
+          id
+          email
+          firstName
+          lastName
+          displayName
+        }
         subtotalPriceSet {
           shopMoney {
             amount
