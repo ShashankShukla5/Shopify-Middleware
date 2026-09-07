@@ -4,10 +4,9 @@ const GET_VARIANT = `
       id
       title
       sku
-      price
-      taxable
-      requiresShipping
-      product {
+        price
+        taxable
+        product {
         id
         title
         vendor

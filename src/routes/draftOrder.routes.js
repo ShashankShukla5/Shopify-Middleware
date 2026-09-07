@@ -5,6 +5,7 @@ const router = express.Router();
 
 router.post('/create-draft-order', async (req, res, next) => {
   try {
+    console.log('Event for create-draft-order received: ', req.body);
     const result = await createDraftOrderFromCart(req.body);
     return res.status(201).json({
       success: true,

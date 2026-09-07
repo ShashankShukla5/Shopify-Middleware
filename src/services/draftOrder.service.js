@@ -5,8 +5,9 @@ const { shopifyGraphQLData } = require('../clients/shopifyGraphQL');
 const { CREATE_DRAFT_ORDER } = require('../graphql/draftOrders');
 const { getVariantByGid } = require('./variant.service');
 const { validateCreateDraftOrderBody } = require('../validators/draftOrder.validator');
+const { resolveLineUnitPrice } = require('./cartPricing.service');
 
-function buildLineCustomAttributes(cartItem, parsedMarkup, shopifyUnitPrice) {
+function buildLineCustomAttributes(cartItem, parsedMarkup, pricing) {
   const customAttributes = [];
 
   if (cartItem.properties) {
@@ -29,7 +30,17 @@ function buildLineCustomAttributes(cartItem, parsedMarkup, shopifyUnitPrice) {
 
   customAttributes.push({
     key: 'Original Unit Price',
-    value: shopifyUnitPrice.toFixed(2),
+    value: pricing.unitPrice.toFixed(2),
+  });
+
+  customAttributes.push({
+    key: 'Shopify Catalog Unit Price',
+    value: Number(pricing.catalogUnitPrice).toFixed(2),
+  });
+
+  customAttributes.push({
+    key: 'Price Source',
+    value: pricing.source,
   });
 
   return customAttributes;
@@ -53,7 +64,7 @@ function buildDraftOrderInput({
         quantity,
         priceOverride: {
           amount: finalUnitPrice.toFixed(2),
-          currencyCode: config.draftOrder.currencyCode,
+          currencyCode: cart.currency || config.draftOrder.currencyCode,
         },
         customAttributes,
       },
@@ -84,16 +95,29 @@ async function createDraftOrderFromCart(body) {
     validateCreateDraftOrderBody(body);
 
   const variantGid = toVariantGid(cartItem.variant_id);
-  const { unitPrice: shopifyUnitPrice } = await getVariantByGid(variantGid);
+  const { unitPrice: catalogUnitPrice } = await getVariantByGid(variantGid);
+  const pricing = resolveLineUnitPrice({ cartItem, catalogUnitPrice });
 
-  const baseTotal = shopifyUnitPrice * quantity;
+  const baseTotal = Number((pricing.unitPrice * quantity).toFixed(2));
   const finalTotal = Number((baseTotal + parsedMarkup).toFixed(2));
   const finalUnitPrice = Number((finalTotal / quantity).toFixed(2));
+
+  console.log('[draft-order] pricing', {
+    variantId: cartItem.variant_id,
+    source: pricing.source,
+    catalogUnitPrice: pricing.catalogUnitPrice,
+    bundleOrCartUnitPrice: pricing.unitPrice,
+    quantity,
+    markup: parsedMarkup,
+    baseTotal,
+    finalUnitPrice,
+    finalTotal,
+  });
 
   const customAttributes = buildLineCustomAttributes(
     cartItem,
     parsedMarkup,
-    shopifyUnitPrice
+    pricing
   );
 
   const input = buildDraftOrderInput({
@@ -140,7 +164,8 @@ async function createDraftOrderFromCart(body) {
       baseTotal: Number(baseTotal.toFixed(2)),
       markup: Number(parsedMarkup.toFixed(2)),
       finalTotal: Number(finalTotal.toFixed(2)),
-      currency: result.draftOrder.currencyCode || config.draftOrder.currencyCode,
+      currency: result.draftOrder.currencyCode || cart.currency || config.draftOrder.currencyCode,
+      priceSource: pricing.source,
     },
   };
 }
