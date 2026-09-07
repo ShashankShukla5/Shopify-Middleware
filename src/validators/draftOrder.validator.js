@@ -1,18 +1,18 @@
 const { AppError } = require('../errors/AppError');
-const { config } = require('../config');
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function validateOptionalEmail(email, label) {
-  if (!email) {
+  if (email == null || String(email).trim() === '') {
     return null;
   }
 
-  if (!EMAIL_PATTERN.test(email)) {
+  const normalized = String(email).trim();
+  if (!EMAIL_PATTERN.test(normalized)) {
     throw new AppError(`Invalid ${label}`, 400);
   }
 
-  return String(email).trim();
+  return normalized;
 }
 
 function validatePractitioner(practitioner) {
@@ -29,8 +29,29 @@ function validatePractitioner(practitioner) {
   };
 }
 
+function validateCartItems(items) {
+  return items.map((cartItem, index) => {
+    const label = `line ${index + 1}`;
+
+    if (!cartItem || typeof cartItem !== 'object') {
+      throw new AppError(`Cart ${label} is invalid`, 400);
+    }
+
+    if (!cartItem.variant_id) {
+      throw new AppError(`Cart ${label} is missing variant ID`, 400);
+    }
+
+    const quantity = Number(cartItem.quantity);
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      throw new AppError(`Invalid product quantity on ${label}`, 400);
+    }
+
+    return cartItem;
+  });
+}
+
 function validateCreateDraftOrderBody(body = {}) {
-  const { cart, markup, customerEmail, practitioner } = body;
+  const { cart, clientEmail, practitioner } = body;
 
   if (!cart || typeof cart !== 'object') {
     throw new AppError('Cart is required', 400);
@@ -40,55 +61,11 @@ function validateCreateDraftOrderBody(body = {}) {
     throw new AppError('Cart is empty', 400);
   }
 
-  const parsedMarkup = Number(markup);
-
-  if (!Number.isFinite(parsedMarkup)) {
-    throw new AppError('Invalid practitioner markup', 400);
-  }
-
-  if (parsedMarkup < 0) {
-    throw new AppError('Markup cannot be negative', 400);
-  }
-
-  if (parsedMarkup > config.draftOrder.maxMarkup) {
-    throw new AppError(
-      `Markup cannot exceed $${config.draftOrder.maxMarkup}`,
-      400
-    );
-  }
-
-  const validatedCustomerEmail = validateOptionalEmail(
-    customerEmail,
-    'customer email'
-  );
-  const validatedPractitioner = validatePractitioner(practitioner);
-
-  if (cart.items.length !== 1) {
-    throw new AppError(
-      'This checkout currently supports one Kefi formulation per cart.',
-      400
-    );
-  }
-
-  const cartItem = cart.items[0];
-
-  if (!cartItem.variant_id) {
-    throw new AppError('Cart item is missing variant ID', 400);
-  }
-
-  const quantity = Number(cartItem.quantity);
-
-  if (!Number.isInteger(quantity) || quantity <= 0) {
-    throw new AppError('Invalid product quantity', 400);
-  }
-
   return {
     cart,
-    cartItem,
-    quantity,
-    parsedMarkup,
-    customerEmail: validatedCustomerEmail,
-    practitioner: validatedPractitioner,
+    cartItems: validateCartItems(cart.items),
+    clientEmail: validateOptionalEmail(clientEmail, 'client email'),
+    practitioner: validatePractitioner(practitioner),
   };
 }
 

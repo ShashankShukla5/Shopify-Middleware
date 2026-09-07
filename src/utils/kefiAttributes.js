@@ -3,6 +3,7 @@ const INTERNAL_PROPERTY_KEYS = new Set([
   '__KF',
   '__bundle_builder',
   '__bundle_builder_fields',
+  '_practitioner_markup',
 ]);
 
 function isInternalKefiPropertyKey(key) {
@@ -38,11 +39,41 @@ function parseBundleBuilderFields(raw) {
 }
 
 /**
- * Draft Order line attributes shown in Admin. Internal Kefi JSON stays on the
- * cart item for pricing, but is never copied onto the Draft Order.
+ * Draft Order line attributes shown in Admin.
+ * Readable cart properties are kept; raw Kefi/internal JSON is not.
  */
 function buildReadableLineAttributes(cartItem) {
-  return parseBundleBuilderFields(cartItem?.properties?.__bundle_builder_fields);
+  const attributes = [];
+  const seen = new Set();
+  const properties = cartItem?.properties || {};
+
+  for (const field of parseBundleBuilderFields(properties.__bundle_builder_fields)) {
+    attributes.push(field);
+    seen.add(field.key.toLowerCase());
+  }
+
+  for (const [key, value] of Object.entries(properties)) {
+    if (isInternalKefiPropertyKey(key)) {
+      continue;
+    }
+
+    if (value === null || value === undefined || value === '') {
+      continue;
+    }
+
+    const label = String(key).trim();
+    if (!label || seen.has(label.toLowerCase())) {
+      continue;
+    }
+
+    attributes.push({
+      key: label,
+      value: String(value),
+    });
+    seen.add(label.toLowerCase());
+  }
+
+  return attributes;
 }
 
 module.exports = {

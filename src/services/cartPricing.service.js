@@ -1,5 +1,6 @@
 const { AppError } = require('../errors/AppError');
 const { toMoneyNumber } = require('../utils/money');
+const { config } = require('../config');
 
 function isKefiBundleItem(cartItem) {
   const properties = cartItem?.properties || {};
@@ -7,22 +8,9 @@ function isKefiBundleItem(cartItem) {
     cartItem?.has_components ||
       properties._builder_subproducts ||
       properties.__bundle_builder ||
-      properties.__KF
+      properties.__KF ||
+      properties.__bundle_builder_fields
   );
-}
-
-function parseBundleSubproducts(cartItem) {
-  const raw = cartItem?.properties?._builder_subproducts;
-  if (!raw) {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    throw new AppError('Kefi bundle subproducts could not be parsed', 400);
-  }
 }
 
 /**
@@ -32,67 +20,93 @@ function parseBundleSubproducts(cartItem) {
 function cartLineUnitPriceInDollars(cartItem) {
   if (cartItem.presentment_price != null) {
     const amount = toMoneyNumber(cartItem.presentment_price);
-    if (Number.isFinite(amount)) {
+    if (Number.isFinite(amount) && amount >= 0) {
       return amount;
     }
   }
 
-  const cents = Number(cartItem.price);
-  if (!Number.isFinite(cents)) {
+  const cents = Number(cartItem.final_price ?? cartItem.price);
+  if (!Number.isFinite(cents) || cents < 0) {
     throw new AppError('Cart item is missing a valid price', 400);
   }
 
   return toMoneyNumber(cents / 100);
 }
 
-function kefiBundleUnitPrice(cartItem) {
-  const components = parseBundleSubproducts(cartItem);
-  if (components.length) {
-    const unit = components.reduce((sum, component) => {
-      const price = Number(component.price);
-      const quantity = Number(component.quantity || 1);
-      if (!Number.isFinite(price) || !Number.isFinite(quantity) || quantity <= 0) {
-        throw new AppError('Kefi bundle subproduct has an invalid price or quantity', 400);
-      }
-      return sum + price * quantity;
-    }, 0);
-
-    return toMoneyNumber(unit);
+function parsePractitionerMarkup(cartItem, lineIndex) {
+  const raw = cartItem?.properties?._practitioner_markup;
+  if (raw == null || raw === '') {
+    return 0;
   }
 
-  return cartLineUnitPriceInDollars(cartItem);
+  const markup = Number(raw);
+  const label = `line ${lineIndex + 1}`;
+
+  if (!Number.isFinite(markup)) {
+    throw new AppError(`Invalid practitioner markup on ${label}`, 400);
+  }
+
+  if (markup < 0) {
+    throw new AppError(`Markup cannot be negative on ${label}`, 400);
+  }
+
+  if (markup > config.draftOrder.maxMarkup) {
+    throw new AppError(
+      `Markup cannot exceed $${config.draftOrder.maxMarkup} on ${label}`,
+      400
+    );
+  }
+
+  return toMoneyNumber(markup);
 }
 
-/**
- * Kefi parent variants are often $0 in Shopify catalog; the real amount is the
- * formulation total. Regular products still use Admin catalog price.
- */
-function resolveLineUnitPrice({ cartItem, catalogUnitPrice }) {
-  if (isKefiBundleItem(cartItem)) {
-    const unitPrice = kefiBundleUnitPrice(cartItem);
-    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
-      throw new AppError('Invalid Kefi bundle price', 400);
-    }
+function priceCartLine(cartItem, lineIndex = 0) {
+  const quantity = Number(cartItem.quantity);
+  const baseUnitPrice = cartLineUnitPriceInDollars(cartItem);
+  const markupPerUnit = parsePractitionerMarkup(cartItem, lineIndex);
+  const isKefi = isKefiBundleItem(cartItem);
 
-    return {
-      unitPrice,
-      source: 'kefi_bundle',
-      catalogUnitPrice,
-    };
-  }
-
-  if (!Number.isFinite(catalogUnitPrice) || catalogUnitPrice < 0) {
-    throw new AppError('Invalid Shopify variant price', 500);
-  }
+  const baseLineTotal = toMoneyNumber(baseUnitPrice * quantity);
+  const markupTotal = toMoneyNumber(markupPerUnit * quantity);
+  const finalLineTotal = toMoneyNumber(baseLineTotal + markupTotal);
+  const finalUnitPrice = toMoneyNumber(baseUnitPrice + markupPerUnit);
 
   return {
-    unitPrice: toMoneyNumber(catalogUnitPrice),
-    source: 'shopify_catalog',
-    catalogUnitPrice: toMoneyNumber(catalogUnitPrice),
+    cartItem,
+    quantity,
+    isKefi,
+    source: isKefi ? 'kefi_cart' : 'shopify_cart',
+    baseUnitPrice,
+    markupPerUnit,
+    baseLineTotal,
+    markupTotal,
+    finalLineTotal,
+    finalUnitPrice,
+  };
+}
+
+function priceCartLines(cartItems) {
+  const lines = cartItems.map((item, index) => priceCartLine(item, index));
+
+  const baseTotal = toMoneyNumber(
+    lines.reduce((sum, line) => sum + line.baseLineTotal, 0)
+  );
+  const markupTotal = toMoneyNumber(
+    lines.reduce((sum, line) => sum + line.markupTotal, 0)
+  );
+  const finalTotal = toMoneyNumber(baseTotal + markupTotal);
+
+  return {
+    lines,
+    baseTotal,
+    markupTotal,
+    finalTotal,
   };
 }
 
 module.exports = {
   isKefiBundleItem,
-  resolveLineUnitPrice,
+  parsePractitionerMarkup,
+  priceCartLine,
+  priceCartLines,
 };

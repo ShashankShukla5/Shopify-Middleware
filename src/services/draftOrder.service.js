@@ -3,73 +3,93 @@ const { toVariantGid } = require('../utils/gids');
 const { AppError } = require('../errors/AppError');
 const { shopifyGraphQLData } = require('../clients/shopifyGraphQL');
 const { CREATE_DRAFT_ORDER } = require('../graphql/draftOrders');
-const { getVariantByGid } = require('./variant.service');
 const { getCustomerById } = require('./customer.service');
+const { sendDraftOrderInvoice } = require('./invoice.service');
 const { validateCreateDraftOrderBody } = require('../validators/draftOrder.validator');
-const { resolveLineUnitPrice } = require('./cartPricing.service');
+const { priceCartLines } = require('./cartPricing.service');
 const { buildReadableLineAttributes } = require('../utils/kefiAttributes');
 
-function buildLineCustomAttributes(cartItem, parsedMarkup, pricing, finalUnitPrice) {
-  const customAttributes = buildReadableLineAttributes(cartItem);
+function buildLineCustomAttributes(pricedLine) {
+  const customAttributes = buildReadableLineAttributes(pricedLine.cartItem);
 
   customAttributes.push({
     key: 'Practitioner Markup',
-    value: parsedMarkup.toFixed(2),
+    value: pricedLine.markupPerUnit.toFixed(2),
   });
 
   customAttributes.push({
     key: 'Original Unit Price',
-    value: pricing.unitPrice.toFixed(2),
+    value: pricedLine.baseUnitPrice.toFixed(2),
   });
 
   customAttributes.push({
     key: 'Final Customer Price',
-    value: finalUnitPrice.toFixed(2),
+    value: pricedLine.finalUnitPrice.toFixed(2),
   });
 
   customAttributes.push({
     key: 'Price Source',
-    value: pricing.source,
+    value: pricedLine.source,
   });
 
   return customAttributes;
 }
 
+function resolveInvoiceRecipient({ clientEmail, practitionerCustomer }) {
+  if (clientEmail) {
+    return {
+      email: clientEmail,
+      recipientType: 'client',
+    };
+  }
+
+  if (!practitionerCustomer.email) {
+    throw new AppError(
+      'No client email provided and practitioner has no email on file in Shopify',
+      400
+    );
+  }
+
+  return {
+    email: practitionerCustomer.email,
+    recipientType: 'practitioner',
+  };
+}
+
 function buildDraftOrderInput({
-  variantGid,
-  quantity,
-  finalUnitPrice,
-  customAttributes,
   cart,
-  baseTotal,
-  parsedMarkup,
-  finalTotal,
-  customerEmail,
+  priced,
+  clientEmail,
   practitionerCustomer,
 }) {
+  if (!practitionerCustomer.email) {
+    throw new AppError('Practitioner has no email on file in Shopify', 400);
+  }
+
+  const currencyCode = cart.currency || config.draftOrder.currencyCode;
+
   const draftOrderInput = {
-    lineItems: [
-      {
-        variantId: variantGid,
-        quantity,
-        priceOverride: {
-          amount: finalUnitPrice.toFixed(2),
-          currencyCode: cart.currency || config.draftOrder.currencyCode,
-        },
-        customAttributes,
+    email: practitionerCustomer.email,
+    lineItems: priced.lines.map((line) => ({
+      variantId: toVariantGid(line.cartItem.variant_id),
+      quantity: line.quantity,
+      priceOverride: {
+        amount: line.finalUnitPrice.toFixed(2),
+        currencyCode,
       },
-    ],
+      customAttributes: buildLineCustomAttributes(line),
+    })),
     tags: config.draftOrder.tags,
     note:
       `Kefi practitioner order. ` +
-      `Base total: $${baseTotal.toFixed(2)}. ` +
-      `Practitioner markup: $${parsedMarkup.toFixed(2)}. ` +
-      `Final total: $${finalTotal.toFixed(2)}.`,
+      `Base total: $${priced.baseTotal.toFixed(2)}. ` +
+      `Practitioner markup: $${priced.markupTotal.toFixed(2)}. ` +
+      `Final total: $${priced.finalTotal.toFixed(2)}.`,
     customAttributes: [
       { key: 'Kefi Cart Token', value: cart.token || '' },
-      { key: 'Base Cart Total', value: baseTotal.toFixed(2) },
-      { key: 'Practitioner Markup', value: parsedMarkup.toFixed(2) },
-      { key: 'Final Customer Total', value: finalTotal.toFixed(2) },
+      { key: 'Base Cart Total', value: priced.baseTotal.toFixed(2) },
+      { key: 'Practitioner Markup', value: priced.markupTotal.toFixed(2) },
+      { key: 'Final Customer Total', value: priced.finalTotal.toFixed(2) },
       { key: 'Practitioner Customer ID', value: practitionerCustomer.id },
     ],
     purchasingEntity: {
@@ -77,10 +97,10 @@ function buildDraftOrderInput({
     },
   };
 
-  if (customerEmail && customerEmail !== practitionerCustomer.email) {
+  if (clientEmail && clientEmail !== practitionerCustomer.email) {
     draftOrderInput.customAttributes.push({
       key: 'Client Email',
-      value: customerEmail,
+      value: clientEmail,
     });
   }
 
@@ -88,47 +108,32 @@ function buildDraftOrderInput({
 }
 
 async function createDraftOrderFromCart(body) {
-  const { cart, cartItem, quantity, parsedMarkup, customerEmail, practitioner } =
+  const { cart, cartItems, clientEmail, practitioner } =
     validateCreateDraftOrderBody(body);
 
   const practitionerCustomer = await getCustomerById(practitioner.id);
-  const variantGid = toVariantGid(cartItem.variant_id);
-  const { unitPrice: catalogUnitPrice } = await getVariantByGid(variantGid);
-  const pricing = resolveLineUnitPrice({ cartItem, catalogUnitPrice });
+  const invoiceRecipient = resolveInvoiceRecipient({
+    clientEmail,
+    practitionerCustomer,
+  });
+  const priced = priceCartLines(cartItems);
 
-  const baseTotal = Number((pricing.unitPrice * quantity).toFixed(2));
-  const finalTotal = Number((baseTotal + parsedMarkup).toFixed(2));
-  const finalUnitPrice = Number((finalTotal / quantity).toFixed(2));
-
-  console.log('[draft-order] pricing', {
-    variantId: cartItem.variant_id,
-    source: pricing.source,
-    catalogUnitPrice: pricing.catalogUnitPrice,
-    bundleOrCartUnitPrice: pricing.unitPrice,
-    quantity,
-    markup: parsedMarkup,
-    baseTotal,
-    finalUnitPrice,
-    finalTotal,
+  console.log('[draft-order] creating draft order', {
+    clientEmail: clientEmail || null,
+    draftOrderEmail: practitionerCustomer.email,
+    invoiceRecipientType: invoiceRecipient.recipientType,
+    invoiceRecipientEmail: invoiceRecipient.email,
+    practitionerCustomerId: practitionerCustomer.id,
+    lineCount: priced.lines.length,
+    baseTotal: priced.baseTotal,
+    markupTotal: priced.markupTotal,
+    finalTotal: priced.finalTotal,
   });
 
-  const customAttributes = buildLineCustomAttributes(
-    cartItem,
-    parsedMarkup,
-    pricing,
-    finalUnitPrice
-  );
-
   const input = buildDraftOrderInput({
-    variantGid,
-    quantity,
-    finalUnitPrice,
-    customAttributes,
     cart,
-    baseTotal,
-    parsedMarkup,
-    finalTotal,
-    customerEmail,
+    priced,
+    clientEmail,
     practitionerCustomer,
   });
 
@@ -154,22 +159,64 @@ async function createDraftOrderFromCart(body) {
     );
   }
 
+  const draftOrder = result.draftOrder;
+  let emailSent = false;
+
+  try {
+    console.log(
+      `[draft-order] Sending invoice to ${invoiceRecipient.recipientType} ${invoiceRecipient.email} for draft order ${draftOrder.id}`
+    );
+    await sendDraftOrderInvoice({
+      draftOrderId: draftOrder.id,
+      email: invoiceRecipient.email,
+    });
+    emailSent = true;
+    console.log(
+      `[draft-order] Invoice sent successfully to ${invoiceRecipient.recipientType} ${invoiceRecipient.email} for draft order ${draftOrder.id}`
+    );
+  } catch (error) {
+    console.error(
+      `[draft-order] Failed to send invoice to ${invoiceRecipient.recipientType} ${invoiceRecipient.email} for draft order ${draftOrder.id}:`,
+      error.message
+    );
+  }
+
+  const draftOrderSummary = {
+    id: draftOrder.id,
+    name: draftOrder.name,
+    status: draftOrder.status,
+    email: draftOrder.email,
+    customer: draftOrder.customer,
+    baseTotal: priced.baseTotal,
+    markup: priced.markupTotal,
+    finalTotal: priced.finalTotal,
+    currency: draftOrder.currencyCode || cart.currency || config.draftOrder.currencyCode,
+    lines: priced.lines.map((line) => ({
+      variantId: line.cartItem.variant_id,
+      source: line.source,
+      quantity: line.quantity,
+      baseUnitPrice: line.baseUnitPrice,
+      markupPerUnit: line.markupPerUnit,
+      finalUnitPrice: line.finalUnitPrice,
+      finalLineTotal: line.finalLineTotal,
+    })),
+  };
+
   return {
-    checkoutUrl: result.draftOrder.invoiceUrl,
-    invoiceUrl: result.draftOrder.invoiceUrl,
-    practitionerEmail: practitionerCustomer.email,
-    draftOrder: {
-      id: result.draftOrder.id,
-      name: result.draftOrder.name,
-      status: result.draftOrder.status,
-      email: result.draftOrder.email,
-      customer: result.draftOrder.customer,
-      baseTotal: Number(baseTotal.toFixed(2)),
-      markup: Number(parsedMarkup.toFixed(2)),
-      finalTotal: Number(finalTotal.toFixed(2)),
-      currency: result.draftOrder.currencyCode || cart.currency || config.draftOrder.currencyCode,
-      priceSource: pricing.source,
-    },
+    success: emailSent,
+    emailSent,
+    draftOrderCreated: true,
+    clientEmail: clientEmail || null,
+    invoiceSentTo: invoiceRecipient.email,
+    invoiceRecipientType: invoiceRecipient.recipientType,
+    checkoutUrl: draftOrder.invoiceUrl,
+    invoiceUrl: draftOrder.invoiceUrl,
+    message: emailSent
+      ? invoiceRecipient.recipientType === 'client'
+        ? 'Invoice sent successfully to the client.'
+        : 'Invoice sent successfully to the practitioner.'
+      : 'Draft Order created, but the invoice email could not be sent.',
+    draftOrder: draftOrderSummary,
   };
 }
 
