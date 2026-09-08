@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const { config } = require('../config');
 const { toVariantGid } = require('../utils/gids');
 const { AppError } = require('../errors/AppError');
@@ -8,31 +9,11 @@ const { sendDraftOrderInvoice } = require('./invoice.service');
 const { validateCreateDraftOrderBody } = require('../validators/draftOrder.validator');
 const { priceCartLines } = require('./cartPricing.service');
 const { buildReadableLineAttributes } = require('../utils/kefiAttributes');
+const { savePractitionerOrderFinancials } = require('./practitionerOrder.service');
 
 function buildLineCustomAttributes(pricedLine) {
-  const customAttributes = buildReadableLineAttributes(pricedLine.cartItem);
-
-  customAttributes.push({
-    key: 'Practitioner Markup',
-    value: pricedLine.markupPerUnit.toFixed(2),
-  });
-
-  customAttributes.push({
-    key: 'Original Unit Price',
-    value: pricedLine.baseUnitPrice.toFixed(2),
-  });
-
-  customAttributes.push({
-    key: 'Final Customer Price',
-    value: pricedLine.finalUnitPrice.toFixed(2),
-  });
-
-  customAttributes.push({
-    key: 'Price Source',
-    value: pricedLine.source,
-  });
-
-  return customAttributes;
+  // Fulfillment/Kefi fields only — no markup, base price, or commission data.
+  return buildReadableLineAttributes(pricedLine.cartItem);
 }
 
 function resolveInvoiceRecipient({ clientEmail, practitionerCustomer }) {
@@ -59,8 +40,8 @@ function resolveInvoiceRecipient({ clientEmail, practitionerCustomer }) {
 function buildDraftOrderInput({
   cart,
   priced,
-  clientEmail,
   practitionerCustomer,
+  financialRecordId,
 }) {
   if (!practitionerCustomer.email) {
     throw new AppError('Practitioner has no email on file in Shopify', 400);
@@ -68,7 +49,7 @@ function buildDraftOrderInput({
 
   const currencyCode = cart.currency || config.draftOrder.currencyCode;
 
-  const draftOrderInput = {
+  return {
     email: practitionerCustomer.email,
     lineItems: priced.lines.map((line) => ({
       variantId: toVariantGid(line.cartItem.variant_id),
@@ -79,32 +60,12 @@ function buildDraftOrderInput({
       },
       customAttributes: buildLineCustomAttributes(line),
     })),
-    tags: config.draftOrder.tags,
-    note:
-      `Kefi practitioner order. ` +
-      `Base total: $${priced.baseTotal.toFixed(2)}. ` +
-      `Practitioner markup: $${priced.markupTotal.toFixed(2)}. ` +
-      `Final total: $${priced.finalTotal.toFixed(2)}.`,
-    customAttributes: [
-      { key: 'Kefi Cart Token', value: cart.token || '' },
-      { key: 'Base Cart Total', value: priced.baseTotal.toFixed(2) },
-      { key: 'Practitioner Markup', value: priced.markupTotal.toFixed(2) },
-      { key: 'Final Customer Total', value: priced.finalTotal.toFixed(2) },
-      { key: 'Practitioner Customer ID', value: practitionerCustomer.id },
-    ],
+    tags: [...config.draftOrder.tags, `kefi-fin-${financialRecordId}`],
+    note: 'Practitioner order',
     purchasingEntity: {
       customerId: practitionerCustomer.id,
     },
   };
-
-  if (clientEmail && clientEmail !== practitionerCustomer.email) {
-    draftOrderInput.customAttributes.push({
-      key: 'Client Email',
-      value: clientEmail,
-    });
-  }
-
-  return draftOrderInput;
 }
 
 async function createDraftOrderFromCart(body) {
@@ -117,6 +78,8 @@ async function createDraftOrderFromCart(body) {
     practitionerCustomer,
   });
   const priced = priceCartLines(cartItems);
+  // Shopify tags max length is 40. Full UUIDs push `kefi-fin-<uuid>` over that.
+  const financialRecordId = crypto.randomBytes(12).toString('hex');
 
   console.log('[draft-order] creating draft order', {
     clientEmail: clientEmail || null,
@@ -124,6 +87,7 @@ async function createDraftOrderFromCart(body) {
     invoiceRecipientType: invoiceRecipient.recipientType,
     invoiceRecipientEmail: invoiceRecipient.email,
     practitionerCustomerId: practitionerCustomer.id,
+    financialRecordId,
     lineCount: priced.lines.length,
     baseTotal: priced.baseTotal,
     markupTotal: priced.markupTotal,
@@ -133,8 +97,8 @@ async function createDraftOrderFromCart(body) {
   const input = buildDraftOrderInput({
     cart,
     priced,
-    clientEmail,
     practitionerCustomer,
+    financialRecordId,
   });
 
   const data = await shopifyGraphQLData(CREATE_DRAFT_ORDER, { input });
@@ -177,6 +141,27 @@ async function createDraftOrderFromCart(body) {
   } catch (error) {
     console.error(
       `[draft-order] Failed to send invoice to ${invoiceRecipient.recipientType} ${invoiceRecipient.email} for draft order ${draftOrder.id}:`,
+      error.message
+    );
+  }
+
+  try {
+    await savePractitionerOrderFinancials({
+      id: financialRecordId,
+      practitionerCustomer,
+      draftOrder,
+      priced,
+      cart,
+      clientEmail,
+      invoiceRecipient,
+      emailSent,
+    });
+    console.log(
+      `[draft-order] Stored financials in PostgreSQL for ${financialRecordId} / ${draftOrder.id}`
+    );
+  } catch (error) {
+    console.error(
+      `[draft-order] Failed to store financials for draft order ${draftOrder.id}:`,
       error.message
     );
   }

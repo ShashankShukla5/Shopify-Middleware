@@ -3,6 +3,7 @@ const { config } = require('../config');
 const { verifyShopifyWebhook } = require('../middleware/verifyShopifyWebhook');
 const { sendOrderInvoice, buildDefaultInvoiceEmail } = require('../services/invoice.service');
 const { toOrderGid } = require('../utils/gids');
+const { linkShopifyOrderFromWebhook } = require('../services/practitionerOrder.service');
 
 const router = express.Router();
 
@@ -23,6 +24,17 @@ router.post('/orders-create', verifyShopifyWebhook, async (req, res) => {
   }
 
   console.log(`[webhook] Extracted Shopify Order ID: ${orderId}`);
+
+  try {
+    const linked = await linkShopifyOrderFromWebhook(payload);
+    if (linked) {
+      console.log(
+        `[webhook] Linked Shopify order ${orderId} to Order ${linked.id} (status=${linked.paymentStatus})`
+      );
+    }
+  } catch (error) {
+    console.error('[webhook] Failed to link practitioner financials:', error.message);
+  }
 
   const contactEmail = payload.contact_email;
   const shouldAutoSendInvoice =

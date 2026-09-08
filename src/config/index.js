@@ -61,6 +61,12 @@ function warnMissingEnv() {
       `[startup] SHOPIFY_API_VERSION not set; defaulting to ${DEFAULT_API_VERSION}`
     );
   }
+
+  if (!process.env.DATABASE_URL) {
+    console.warn(
+      '[startup] DATABASE_URL not set. Practitioner financials will fail to persist until PostgreSQL is configured.'
+    );
+  }
 }
 
 function assertShopifyAdminConfigured() {
