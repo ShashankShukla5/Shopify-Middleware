@@ -17,19 +17,10 @@ enum InvoiceRecipientType {
   PRACTITIONER
 }
 
-/// Tracks money collection for the practitioner dashboard.
-/// Maps loosely to Shopify financial_status, plus our draft/invoice stages.
+/// Payment collection only — invoice delivery is Order.invoiceSent.
 enum PaymentStatus {
-  DRAFT
-  INVOICE_SENT
   PENDING
-  AUTHORIZED
-  PARTIALLY_PAID
   PAID
-  PARTIALLY_REFUNDED
-  REFUNDED
-  VOIDED
-  CANCELLED
 }
 
 /// Practitioner = logged-in Shopify customer who sells with markup.
@@ -72,7 +63,7 @@ model Order {
   markupTotal           Decimal               @db.Decimal(12, 2)
   finalTotal            Decimal               @db.Decimal(12, 2)
 
-  paymentStatus         PaymentStatus         @default(DRAFT)
+  paymentStatus         PaymentStatus         @default(PENDING)
   invoiceSent           Boolean               @default(false)
   invoiceSentAt         DateTime?
   paidAt                DateTime?

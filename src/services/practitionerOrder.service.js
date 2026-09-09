@@ -17,9 +17,7 @@ async function savePractitionerOrderFinancials({
   emailSent,
 }) {
   const currency = draftOrder.currencyCode || cart.currency || 'AUD';
-  const paymentStatus = emailSent
-    ? PAYMENT_STATUS.INVOICE_SENT
-    : PAYMENT_STATUS.DRAFT;
+  const paymentStatus = PAYMENT_STATUS.PENDING;
 
   const practitioner = await upsertPractitionerFromShopifyCustomer(
     practitionerCustomer
@@ -33,11 +31,9 @@ async function savePractitionerOrderFinancials({
         shopifyDraftOrderId: draftOrder.id,
         shopifyDraftOrderName: draftOrder.name || null,
         clientEmail: clientEmail || null,
-        invoiceRecipientEmail: invoiceRecipient.email,
+        invoiceRecipientEmail: invoiceRecipient?.email || null,
         invoiceRecipientType:
-          invoiceRecipient.recipientType === 'client'
-            ? 'CLIENT'
-            : 'PRACTITIONER',
+          invoiceRecipient?.recipientType === 'client' ? 'CLIENT' : null,
         currency,
         baseTotal: priced.baseTotal,
         markupTotal: priced.markupTotal,
@@ -69,7 +65,11 @@ async function savePractitionerOrderFinancials({
             fromStatus: null,
             toStatus: paymentStatus,
             source: 'draft_order_create',
-            note: emailSent ? 'Invoice emailed' : 'Draft created; invoice not sent',
+            note: emailSent
+              ? 'Invoice emailed to client'
+              : clientEmail
+                ? 'Draft created; invoice send failed'
+                : 'Draft created; no client email, invoice not sent',
           },
         },
       },

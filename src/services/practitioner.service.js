@@ -45,7 +45,29 @@ async function upsertPractitionerFromShopifyCustomer(customer) {
   });
 }
 
+/**
+ * Resolve Practitioner for dashboard auth from a Shopify customer id or GID.
+ */
+async function findPractitionerByShopifyCustomerId(customerId) {
+  if (customerId == null || String(customerId).trim() === '') {
+    return null;
+  }
+
+  const raw = String(customerId).trim();
+  const gid = raw.startsWith('gid://') ? raw : `gid://shopify/Customer/${raw}`;
+  const numeric = raw.startsWith('gid://')
+    ? extractNumericShopifyCustomerId({ id: raw })
+    : raw;
+
+  return prisma.practitioner.findFirst({
+    where: {
+      OR: [{ shopifyCustomerId: numeric }, { shopifyCustomerGid: gid }],
+    },
+  });
+}
+
 module.exports = {
   upsertPractitionerFromShopifyCustomer,
   extractNumericShopifyCustomerId,
+  findPractitionerByShopifyCustomerId,
 };

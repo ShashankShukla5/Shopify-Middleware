@@ -16,24 +16,14 @@ function buildLineCustomAttributes(pricedLine) {
   return buildReadableLineAttributes(pricedLine.cartItem);
 }
 
-function resolveInvoiceRecipient({ clientEmail, practitionerCustomer }) {
-  if (clientEmail) {
-    return {
-      email: clientEmail,
-      recipientType: 'client',
-    };
-  }
-
-  if (!practitionerCustomer.email) {
-    throw new AppError(
-      'No client email provided and practitioner has no email on file in Shopify',
-      400
-    );
+function resolveInvoiceRecipient(clientEmail) {
+  if (!clientEmail) {
+    return null;
   }
 
   return {
-    email: practitionerCustomer.email,
-    recipientType: 'practitioner',
+    email: clientEmail,
+    recipientType: 'client',
   };
 }
 
@@ -73,10 +63,7 @@ async function createDraftOrderFromCart(body) {
     validateCreateDraftOrderBody(body);
 
   const practitionerCustomer = await getCustomerById(practitioner.id);
-  const invoiceRecipient = resolveInvoiceRecipient({
-    clientEmail,
-    practitionerCustomer,
-  });
+  const invoiceRecipient = resolveInvoiceRecipient(clientEmail);
   const priced = priceCartLines(cartItems);
   // Shopify tags max length is 40. Full UUIDs push `kefi-fin-<uuid>` over that.
   const financialRecordId = crypto.randomBytes(12).toString('hex');
@@ -84,8 +71,8 @@ async function createDraftOrderFromCart(body) {
   console.log('[draft-order] creating draft order', {
     clientEmail: clientEmail || null,
     draftOrderEmail: practitionerCustomer.email,
-    invoiceRecipientType: invoiceRecipient.recipientType,
-    invoiceRecipientEmail: invoiceRecipient.email,
+    invoiceRecipientType: invoiceRecipient?.recipientType || null,
+    invoiceRecipientEmail: invoiceRecipient?.email || null,
     practitionerCustomerId: practitionerCustomer.id,
     financialRecordId,
     lineCount: priced.lines.length,
@@ -125,23 +112,30 @@ async function createDraftOrderFromCart(body) {
 
   const draftOrder = result.draftOrder;
   let emailSent = false;
+  let emailSkipped = !invoiceRecipient;
 
-  try {
+  if (invoiceRecipient) {
+    try {
+      console.log(
+        `[draft-order] Sending invoice to client ${invoiceRecipient.email} for draft order ${draftOrder.id}`
+      );
+      await sendDraftOrderInvoice({
+        draftOrderId: draftOrder.id,
+        email: invoiceRecipient.email,
+      });
+      emailSent = true;
+      console.log(
+        `[draft-order] Invoice sent successfully to client ${invoiceRecipient.email} for draft order ${draftOrder.id}`
+      );
+    } catch (error) {
+      console.error(
+        `[draft-order] Failed to send invoice to client ${invoiceRecipient.email} for draft order ${draftOrder.id}:`,
+        error.message
+      );
+    }
+  } else {
     console.log(
-      `[draft-order] Sending invoice to ${invoiceRecipient.recipientType} ${invoiceRecipient.email} for draft order ${draftOrder.id}`
-    );
-    await sendDraftOrderInvoice({
-      draftOrderId: draftOrder.id,
-      email: invoiceRecipient.email,
-    });
-    emailSent = true;
-    console.log(
-      `[draft-order] Invoice sent successfully to ${invoiceRecipient.recipientType} ${invoiceRecipient.email} for draft order ${draftOrder.id}`
-    );
-  } catch (error) {
-    console.error(
-      `[draft-order] Failed to send invoice to ${invoiceRecipient.recipientType} ${invoiceRecipient.email} for draft order ${draftOrder.id}:`,
-      error.message
+      `[draft-order] No client email provided; skipping invoice email for draft order ${draftOrder.id}`
     );
   }
 
@@ -187,20 +181,26 @@ async function createDraftOrderFromCart(body) {
     })),
   };
 
+  let message;
+  if (emailSent) {
+    message = 'Invoice sent successfully to the client.';
+  } else if (emailSkipped) {
+    message = 'Draft Order created. No client email provided, so no invoice email was sent.';
+  } else {
+    message = 'Draft Order created, but the invoice email could not be sent.';
+  }
+
   return {
-    success: emailSent,
+    success: true,
     emailSent,
+    emailSkipped,
     draftOrderCreated: true,
     clientEmail: clientEmail || null,
-    invoiceSentTo: invoiceRecipient.email,
-    invoiceRecipientType: invoiceRecipient.recipientType,
+    invoiceSentTo: invoiceRecipient?.email || null,
+    invoiceRecipientType: invoiceRecipient?.recipientType || null,
     checkoutUrl: draftOrder.invoiceUrl,
     invoiceUrl: draftOrder.invoiceUrl,
-    message: emailSent
-      ? invoiceRecipient.recipientType === 'client'
-        ? 'Invoice sent successfully to the client.'
-        : 'Invoice sent successfully to the practitioner.'
-      : 'Draft Order created, but the invoice email could not be sent.',
+    message,
     draftOrder: draftOrderSummary,
   };
 }

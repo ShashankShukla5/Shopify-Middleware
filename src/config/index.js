@@ -39,6 +39,9 @@ function loadConfig() {
       autoSendTo:
         process.env.AUTO_INVOICE_EMAIL || 'hello@dispensaryandco.com.au',
     },
+    dashboard: {
+      authSecret: process.env.DASHBOARD_AUTH_SECRET || '',
+    },
   };
 }
 

@@ -16,8 +16,9 @@ router.post('/create-draft-order', async (req, res, next) => {
     const result = await createDraftOrderFromCart(req.body);
 
     return res.status(201).json({
-      success: result.emailSent,
+      success: result.success,
       emailSent: result.emailSent,
+      emailSkipped: result.emailSkipped,
       draftOrderCreated: result.draftOrderCreated,
       clientEmail: result.clientEmail,
       invoiceSentTo: result.invoiceSentTo,
