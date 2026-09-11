@@ -17,10 +17,11 @@ enum InvoiceRecipientType {
   PRACTITIONER
 }
 
-/// Payment collection only — invoice delivery is Order.invoiceSent.
+/// Payment collection — invoice delivery is Order.invoiceSent.
 enum PaymentStatus {
   PENDING
   PAID
+  CANCELLED
 }
 
 /// Practitioner = logged-in Shopify customer who sells with markup.

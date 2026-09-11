@@ -49,11 +49,11 @@ function createApp() {
    * Shopify HMAC verification requires the exact raw request body.
    * Mount webhooks with express.raw BEFORE express.json().
    */
-  // app.use(
-  //   '/webhooks',
-  //   express.raw({ type: 'application/json' }),
-  //   webhookRouter
-  // );
+  app.use(
+    '/webhooks',
+    express.raw({ type: 'application/json' }),
+    webhookRouter
+  );
 
   app.use(express.json());
   app.use('/api/shopify', draftOrderRouter);

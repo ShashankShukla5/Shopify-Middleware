@@ -23,9 +23,14 @@ function toCustomerGid(customerId) {
   return toGid('Customer', customerId);
 }
 
+function toDraftOrderGid(draftOrderId) {
+  return toGid('DraftOrder', draftOrderId);
+}
+
 module.exports = {
   toGid,
   toVariantGid,
   toOrderGid,
   toCustomerGid,
+  toDraftOrderGid,
 };

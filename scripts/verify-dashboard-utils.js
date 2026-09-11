@@ -56,6 +56,7 @@ assert.strictEqual(
 
 assert.ok(isValidPaymentStatus('PAID'));
 assert.ok(isValidPaymentStatus('PENDING'));
+assert.ok(isValidPaymentStatus('CANCELLED'));
 assert.ok(!isValidPaymentStatus('paid'));
 assert.ok(!isValidPaymentStatus('DRAFT'));
 assert.ok(!isValidPaymentStatus('INVOICE_SENT'));

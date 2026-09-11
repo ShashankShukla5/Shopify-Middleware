@@ -79,7 +79,10 @@ function parseStatusFilter(status) {
 
   const normalized = String(status).trim().toUpperCase();
   if (!isValidPaymentStatus(normalized)) {
-    throw new AppError('Invalid payment status. Use PENDING or PAID.', 400);
+    throw new AppError(
+      'Invalid payment status. Use PENDING, PAID, or CANCELLED.',
+      400
+    );
   }
 
   return normalized;
